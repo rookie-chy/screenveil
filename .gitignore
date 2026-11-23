@@ -1,0 +1,22 @@
+# build output
+*.exe
+*.pdb
+*.zip
+dist/
+bin/
+obj/
+
+# runtime bits
+*.bak
+*.log
+screenveil.json
+
+# python
+__pycache__/
+*.pyc
+
+# editors
+.vs/
+.vscode/
+.idea/
+*.user
