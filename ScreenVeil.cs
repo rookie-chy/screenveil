@@ -192,6 +192,32 @@ namespace ScreenVeil
 
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr hIcon);
+
+        // ── 鼠标侧键：低级鼠标钩子（只有在绑了鼠标键、或正在录制时才装） ──
+
+        public const int WH_MOUSE_LL = 14;
+        public const int WM_XBUTTONDOWN = 0x020B;
+
+        public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSLLHOOKSTRUCT
+        {
+            public POINT pt;
+            public int mouseData;
+            public int flags;
+            public int time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     }
 
     // ───────────────────────────── 数据模型 ─────────────────────────────
@@ -248,6 +274,7 @@ namespace ScreenVeil
         public bool ToggleOnRepeat = false;
         public bool MinimizeOthers = true;
         public bool HideInsteadOfMinimize = false;
+        public bool RestoreClamp = true;
         public bool ShowTips = true;
         public List<string> NeverMinimize = new List<string>();
         public List<Target> Targets = new List<Target>();
@@ -283,6 +310,7 @@ namespace ScreenVeil
   ""toggleOnRepeat"": false,
   ""minimizeOthers"": true,
   ""hideInsteadOfMinimize"": false,
+  ""restoreClamp"": true,
   ""showTips"": true,
   ""neverMinimize"": [],
   ""targets"": []
@@ -370,6 +398,7 @@ namespace ScreenVeil
             cfg.ToggleOnRepeat = GetBool(d, "toggleOnRepeat", cfg.ToggleOnRepeat);
             cfg.MinimizeOthers = GetBool(d, "minimizeOthers", cfg.MinimizeOthers);
             cfg.HideInsteadOfMinimize = GetBool(d, "hideInsteadOfMinimize", cfg.HideInsteadOfMinimize);
+            cfg.RestoreClamp = GetBool(d, "restoreClamp", cfg.RestoreClamp);
             cfg.ShowTips = GetBool(d, "showTips", cfg.ShowTips);
 
             var never = GetArr(d, "neverMinimize");
@@ -424,12 +453,13 @@ namespace ScreenVeil
         {
             var sb = new StringBuilder();
             sb.AppendLine("{");
-            sb.AppendLine("  \"_说明\": " + J("改完保存后，在托盘图标右键菜单里点「重新加载配置」。process 填进程名（任务管理器里的名字，不带 .exe）。exe 可选：程序没开时自动启动它。title 可选：正则，用来在同一个程序里挑窗口。span=true 表示让这个窗口横跨所有屏幕。") + ",");
+            sb.AppendLine("  \"_说明\": " + J("改完保存后，在托盘图标右键菜单里点「重新加载配置」。process 填进程名（任务管理器里的名字，不带 .exe）。exe 可选：程序没开时自动启动它。title 可选：正则，用来在同一个程序里挑窗口。span=true 表示让这个窗口横跨所有屏幕。hotkey 可以写组合键，也可以写鼠标侧键 Mouse4 / Mouse5。") + ",");
             sb.AppendLine("  \"hotkey\": " + J(cfg.HotKey) + ",");
             sb.AppendLine("  \"restoreHotkey\": " + J(cfg.RestoreHotKey) + ",");
             sb.AppendLine("  \"toggleOnRepeat\": " + Bool(cfg.ToggleOnRepeat) + ",");
             sb.AppendLine("  \"minimizeOthers\": " + Bool(cfg.MinimizeOthers) + ",");
             sb.AppendLine("  \"hideInsteadOfMinimize\": " + Bool(cfg.HideInsteadOfMinimize) + ",");
+            sb.AppendLine("  \"restoreClamp\": " + Bool(cfg.RestoreClamp) + ",");
             sb.AppendLine("  \"showTips\": " + Bool(cfg.ShowTips) + ",");
             sb.AppendLine();
 
@@ -545,6 +575,8 @@ namespace ScreenVeil
     {
         public uint Mods;
         public uint Key;
+        public bool IsMouse;
+        public int MouseButton;     // 1 = 侧键（后退）, 2 = 侧键（前进）
         public string Error = "";
     }
 
@@ -556,6 +588,21 @@ namespace ScreenVeil
             if (string.IsNullOrEmpty(text))
             {
                 spec.Error = "热键为空";
+                return spec;
+            }
+
+            // 鼠标侧键：Mouse4 / Mouse5（也认 XButton1/2 和 M4/M5）
+            string whole = text.Trim().ToLowerInvariant();
+            if (whole == "mouse4" || whole == "xbutton1" || whole == "m4")
+            {
+                spec.IsMouse = true;
+                spec.MouseButton = 1;
+                return spec;
+            }
+            if (whole == "mouse5" || whole == "xbutton2" || whole == "m5")
+            {
+                spec.IsMouse = true;
+                spec.MouseButton = 2;
                 return spec;
             }
 
@@ -927,15 +974,57 @@ namespace ScreenVeil
 
         public static void RestoreState(SavedPlacement s)
         {
+            RestoreState(s, null, false);
+        }
+
+        public static void RestoreState(SavedPlacement s, List<Monitor> mons, bool clamp)
+        {
             if (!Nat.IsWindow(s.H)) return;
             Nat.ShowWindow(s.H, Nat.SW_RESTORE);
             if (!s.Minimized && s.Rect.Width > 0 && s.Rect.Height > 0)
             {
-                Nat.SetWindowPos(s.H, IntPtr.Zero, s.Rect.Left, s.Rect.Top, s.Rect.Width, s.Rect.Height,
+                RECT target = s.Rect;
+                // 保险：把窗口收进它自己那块屏，别让它一半压在隔壁屏上
+                if (clamp && mons != null && mons.Count > 0 && !s.Maximized)
+                    target = ClampToMonitor(target, mons);
+
+                Nat.SetWindowPos(s.H, IntPtr.Zero, target.Left, target.Top, target.Width, target.Height,
                     Nat.SWP_NOZORDER | Nat.SWP_NOACTIVATE | Nat.SWP_SHOWWINDOW);
             }
             if (s.Maximized) Nat.ShowWindow(s.H, Nat.SW_MAXIMIZE);
             else if (s.Minimized) Nat.ShowWindow(s.H, Nat.SW_MINIMIZE);
+        }
+
+        static RECT ClampToMonitor(RECT r, List<Monitor> mons)
+        {
+            Monitor best = null;
+            int bestArea = -1;
+            foreach (Monitor m in mons)
+            {
+                int l = Math.Max(r.Left, m.Work.Left);
+                int t = Math.Max(r.Top, m.Work.Top);
+                int rr = Math.Min(r.Right, m.Work.Right);
+                int bb = Math.Min(r.Bottom, m.Work.Bottom);
+                int area = Math.Max(0, rr - l) * Math.Max(0, bb - t);
+                if (area > bestArea) { bestArea = area; best = m; }
+            }
+            if (best == null || bestArea <= 0) return r;
+
+            RECT w = best.Work;
+            if (r.Left >= w.Left && r.Top >= w.Top && r.Right <= w.Right && r.Bottom <= w.Bottom)
+                return r;   // 本来就在里面
+
+            int cw = Math.Min(r.Width, w.Width);
+            int ch = Math.Min(r.Height, w.Height);
+            int cx = Math.Max(w.Left, Math.Min(r.Left, w.Right - cw));
+            int cy = Math.Max(w.Top, Math.Min(r.Top, w.Bottom - ch));
+
+            RECT o;
+            o.Left = cx;
+            o.Top = cy;
+            o.Right = cx + cw;
+            o.Bottom = cy + ch;
+            return o;
         }
     }
 
@@ -1113,10 +1202,11 @@ namespace ScreenVeil
             {
                 if (!applied && saved.Count == 0) return "现在没切换过";
                 Log.Clear();
+                List<Monitor> mons = Win.GetMonitors();
                 foreach (SavedPlacement sp in saved)
                 {
                     if (!Nat.IsWindow(sp.H)) continue;
-                    Win.RestoreState(sp);
+                    Win.RestoreState(sp, mons, Cfg != null && Cfg.RestoreClamp);
                     RECT after;
                     Nat.GetWindowRect(sp.H, out after);
                     Log.Add(string.Format("  还原 hwnd=0x{0:X} 目标 {1}  实际 {2}",
@@ -1303,6 +1393,7 @@ namespace ScreenVeil
         ComboBox cbMain, cbSub;
         CheckBox chkMin, chkAuto;
         TextBox boxSwitch, boxRestore;
+        Label hintLabel;
         Config cfg;
         string hotkeyError;
         bool multiScreen;
@@ -1394,12 +1485,12 @@ namespace ScreenVeil
             boxRestore = MakeKeyBox(new Point(388, 193), cfg.RestoreHotKey);
             Controls.Add(boxRestore);
 
-            var hint = new Label();
-            hint.Text = string.IsNullOrEmpty(hotkeyError) ? "点一下输入框，然后直接按你想要的组合键" : hotkeyError;
-            hint.ForeColor = string.IsNullOrEmpty(hotkeyError) ? Color.FromArgb(130, 130, 140) : Color.FromArgb(200, 50, 50);
-            hint.AutoSize = true;
-            hint.Location = new Point(112, 224);
-            Controls.Add(hint);
+            hintLabel = new Label();
+            hintLabel.Text = string.IsNullOrEmpty(hotkeyError) ? "点一下输入框，然后按组合键（鼠标侧键也行）" : hotkeyError;
+            hintLabel.ForeColor = string.IsNullOrEmpty(hotkeyError) ? Color.FromArgb(130, 130, 140) : Color.FromArgb(200, 50, 50);
+            hintLabel.AutoSize = true;
+            hintLabel.Location = new Point(112, 224);
+            Controls.Add(hintLabel);
 
             SelectProcess(cbMain, cfg.Targets.Count > 0 ? cfg.Targets[0].Process : "");
             SelectProcess(cbSub, cfg.Targets.Count > 1 ? cfg.Targets[1].Process : "");
@@ -1476,9 +1567,31 @@ namespace ScreenVeil
 
                 string text = BuildHotkeyText(mods, key);
                 if (text != null) ((TextBox)c).Text = text;
+                else ShowKeyHint();
                 return true;
             }
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        // 鼠标侧键：由全局钩子转进来（钩子跑在 UI 线程，所以这里可以碰控件）
+        public bool TryRecordMouse(int button)
+        {
+            Control c = ActiveControl;
+            if (c == null || (c != boxSwitch && c != boxRestore)) return false;
+            ((TextBox)c).Text = button == 1 ? "Mouse4" : "Mouse5";
+            if (hintLabel != null)
+            {
+                hintLabel.Text = "已记录鼠标" + (button == 1 ? "侧键（后退）" : "侧键（前进）") + "，这个键会被本程序接管";
+                hintLabel.ForeColor = Color.FromArgb(60, 130, 60);
+            }
+            return true;
+        }
+
+        void ShowKeyHint()
+        {
+            if (hintLabel == null) return;
+            hintLabel.Text = "单个字母/数字会抢走键盘输入，加个 Ctrl/Alt/Shift；F1~F12、Pause、PrintScreen 和鼠标侧键可以单用";
+            hintLabel.ForeColor = Color.FromArgb(200, 120, 30);
         }
 
         void CaptureKeys(KeyEventArgs e)
@@ -1499,7 +1612,8 @@ namespace ScreenVeil
 
             bool hasMod = (mods & (Keys.Control | Keys.Alt | Keys.Shift)) != 0;
             bool isFn = key >= Keys.F1 && key <= Keys.F24;
-            if (!hasMod && !isFn) return null;   // 单按字母会把整个键盘都吃掉，不允许
+            bool isLone = key == Keys.Pause || key == Keys.Scroll || key == Keys.PrintScreen;
+            if (!hasMod && !isFn && !isLone) return null;   // 单按字母会把整个键盘都吃掉，不允许
 
             var sb = new StringBuilder();
             if ((mods & Keys.Control) != 0) sb.Append("Ctrl+");
@@ -1831,6 +1945,10 @@ namespace ScreenVeil
         string hotkeyError = "";
         string activeHotkey = "";
         string activeRestore = "";
+        IntPtr mouseHook = IntPtr.Zero;
+        Nat.LowLevelMouseProc mouseProc;
+        int mouseSwitchButton;
+        int mouseRestoreButton;
         bool shownError;
         readonly object workGate = new object();
         bool busy;
@@ -1938,9 +2056,11 @@ namespace ScreenVeil
             p.FormClosed += delegate
             {
                 if (picker == p) picker = null;
+                EnsureMouseHook();
                 Tip("已缩到托盘继续运行（Win11 可能在右下角 ^ 里）：" + cfg.HotKey + " 切换");
             };
             p.Show();
+            EnsureMouseHook();
         }
 
         // 配置文件被外部改动时自动重载
@@ -1994,33 +2114,45 @@ namespace ScreenVeil
             Nat.UnregisterHotKey(form.Handle, HK_TOGGLE);
             Nat.UnregisterHotKey(form.Handle, HK_RESTORE);
 
-            bool ok1 = Nat.RegisterHotKey(form.Handle, HK_TOGGLE, a.Mods | Nat.MOD_NOREPEAT, a.Key);
-            bool ok2 = Nat.RegisterHotKey(form.Handle, HK_RESTORE, b.Mods | Nat.MOD_NOREPEAT, b.Key);
+            bool ok1 = a.IsMouse || Nat.RegisterHotKey(form.Handle, HK_TOGGLE, a.Mods | Nat.MOD_NOREPEAT, a.Key);
+            bool ok2 = b.IsMouse || Nat.RegisterHotKey(form.Handle, HK_RESTORE, b.Mods | Nat.MOD_NOREPEAT, b.Key);
 
             if (ok1 && ok2)
             {
+                mouseSwitchButton = a.IsMouse ? a.MouseButton : 0;
+                mouseRestoreButton = b.IsMouse ? b.MouseButton : 0;
                 activeHotkey = cfg.HotKey;
                 activeRestore = cfg.RestoreHotKey;
                 hotkeyError = "";
+                EnsureMouseHook();
                 return null;
             }
 
             // 有冲突：撤掉刚注册的，退回上一次能用的组合，并把配置改回去
             Nat.UnregisterHotKey(form.Handle, HK_TOGGLE);
             Nat.UnregisterHotKey(form.Handle, HK_RESTORE);
+            mouseSwitchButton = 0;
+            mouseRestoreButton = 0;
 
             if (activeHotkey.Length > 0)
             {
                 HotkeySpec oa = Hotkey.Parse(activeHotkey);
                 if (oa.Error.Length == 0)
-                    Nat.RegisterHotKey(form.Handle, HK_TOGGLE, oa.Mods | Nat.MOD_NOREPEAT, oa.Key);
+                {
+                    if (oa.IsMouse) mouseSwitchButton = oa.MouseButton;
+                    else Nat.RegisterHotKey(form.Handle, HK_TOGGLE, oa.Mods | Nat.MOD_NOREPEAT, oa.Key);
+                }
             }
             if (activeRestore.Length > 0)
             {
                 HotkeySpec ob = Hotkey.Parse(activeRestore);
                 if (ob.Error.Length == 0)
-                    Nat.RegisterHotKey(form.Handle, HK_RESTORE, ob.Mods | Nat.MOD_NOREPEAT, ob.Key);
+                {
+                    if (ob.IsMouse) mouseRestoreButton = ob.MouseButton;
+                    else Nat.RegisterHotKey(form.Handle, HK_RESTORE, ob.Mods | Nat.MOD_NOREPEAT, ob.Key);
+                }
             }
+            EnsureMouseHook();
 
             hotkeyError = ok1
                 ? "还原键 " + cfg.RestoreHotKey + " 被别的程序占用了"
@@ -2035,6 +2167,54 @@ namespace ScreenVeil
             }
 
             return hotkeyError;
+        }
+
+        bool MouseHotkeyConfigured { get { return mouseSwitchButton != 0 || mouseRestoreButton != 0; } }
+
+        // 只有「绑了鼠标侧键」或「选择窗口开着（可能要录制）」时才装钩子，
+        // 纯键盘用户完全不装，没有任何鼠标走这里的开销。
+        void EnsureMouseHook()
+        {
+            bool need = MouseHotkeyConfigured || (picker != null && !picker.IsDisposed);
+            try
+            {
+                if (need && mouseHook == IntPtr.Zero)
+                {
+                    mouseProc = MouseHookProc;      // 保持引用，别被 GC 掉
+                    mouseHook = Nat.SetWindowsHookEx(Nat.WH_MOUSE_LL, mouseProc, IntPtr.Zero, 0);
+                }
+                else if (!need && mouseHook != IntPtr.Zero)
+                {
+                    Nat.UnhookWindowsHookEx(mouseHook);
+                    mouseHook = IntPtr.Zero;
+                    mouseProc = null;
+                }
+            }
+            catch { }
+        }
+
+        IntPtr MouseHookProc(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            try
+            {
+                if (nCode >= 0 && (int)wParam == Nat.WM_XBUTTONDOWN)
+                {
+                    var info = (Nat.MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Nat.MSLLHOOKSTRUCT));
+                    int btn = (info.mouseData >> 16) & 0xFFFF;
+                    if (btn == 1 || btn == 2)
+                    {
+                        // 正在录制按键：写进输入框，并吞掉这个键
+                        if (picker != null && !picker.IsDisposed && picker.TryRecordMouse(btn))
+                            return (IntPtr)1;
+
+                        // 已经绑定：触发，并吞掉（不然浏览器会执行后退/前进）
+                        if (btn == mouseSwitchButton) { DoToggle(); return (IntPtr)1; }
+                        if (btn == mouseRestoreButton) { DoRestore(); return (IntPtr)1; }
+                    }
+                }
+            }
+            catch { }
+            return Nat.CallNextHookEx(mouseHook, nCode, wParam, lParam);
         }
 
         void BuildMenu()
@@ -2296,6 +2476,8 @@ namespace ScreenVeil
             {
                 Nat.UnregisterHotKey(form.Handle, HK_TOGGLE);
                 Nat.UnregisterHotKey(form.Handle, HK_RESTORE);
+                if (mouseHook != IntPtr.Zero) Nat.UnhookWindowsHookEx(mouseHook);
+                mouseHook = IntPtr.Zero;
             }
             catch { }
             if (engine.Applied) { try { engine.Restore(); } catch { } }
