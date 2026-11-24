@@ -1,4 +1,4 @@
-﻿// ScreenVeil —— 双屏“老板键”
+// ScreenVeil —— 双屏“老板键”
 // 按一个热键：把所有窗口最小化，然后按配置把指定应用分别铺到每块屏幕上；
 // 再按一次（或按恢复键）回到原来的样子。
 //
@@ -275,6 +275,8 @@ namespace ScreenVeil
         public bool MinimizeOthers = true;
         public bool HideInsteadOfMinimize = false;
         public bool RestoreClamp = true;
+        public bool PauseMediaOnSwitch = true;
+        public bool ResumeMediaOnRestore = true;
         public bool ShowTips = true;
         public List<string> NeverMinimize = new List<string>();
         public List<Target> Targets = new List<Target>();
@@ -311,6 +313,8 @@ namespace ScreenVeil
   ""minimizeOthers"": true,
   ""hideInsteadOfMinimize"": false,
   ""restoreClamp"": true,
+  ""pauseMediaOnSwitch"": true,
+  ""resumeMediaOnRestore"": true,
   ""showTips"": true,
   ""neverMinimize"": [],
   ""targets"": []
@@ -399,6 +403,8 @@ namespace ScreenVeil
             cfg.MinimizeOthers = GetBool(d, "minimizeOthers", cfg.MinimizeOthers);
             cfg.HideInsteadOfMinimize = GetBool(d, "hideInsteadOfMinimize", cfg.HideInsteadOfMinimize);
             cfg.RestoreClamp = GetBool(d, "restoreClamp", cfg.RestoreClamp);
+            cfg.PauseMediaOnSwitch = GetBool(d, "pauseMediaOnSwitch", cfg.PauseMediaOnSwitch);
+            cfg.ResumeMediaOnRestore = GetBool(d, "resumeMediaOnRestore", cfg.ResumeMediaOnRestore);
             cfg.ShowTips = GetBool(d, "showTips", cfg.ShowTips);
 
             var never = GetArr(d, "neverMinimize");
@@ -460,6 +466,8 @@ namespace ScreenVeil
             sb.AppendLine("  \"minimizeOthers\": " + Bool(cfg.MinimizeOthers) + ",");
             sb.AppendLine("  \"hideInsteadOfMinimize\": " + Bool(cfg.HideInsteadOfMinimize) + ",");
             sb.AppendLine("  \"restoreClamp\": " + Bool(cfg.RestoreClamp) + ",");
+            sb.AppendLine("  \"pauseMediaOnSwitch\": " + Bool(cfg.PauseMediaOnSwitch) + ",");
+            sb.AppendLine("  \"resumeMediaOnRestore\": " + Bool(cfg.ResumeMediaOnRestore) + ",");
             sb.AppendLine("  \"showTips\": " + Bool(cfg.ShowTips) + ",");
             sb.AppendLine();
 
@@ -1038,6 +1046,7 @@ namespace ScreenVeil
         bool applied;
         List<SavedPlacement> saved = new List<SavedPlacement>();
         List<IntPtr> touched = new List<IntPtr>();
+        List<string> pausedMedia = new List<string>();
         IntPtr prevForeground;
 
         static string Trim(string s, int n)
@@ -1190,6 +1199,17 @@ namespace ScreenVeil
                 Win.ForceForeground(plan[0].W.H);
                 applied = true;
 
+                // 正在播放的网页视频 / 音乐：切过去时先暂停（还原时再放回来）
+                if (Cfg.PauseMediaOnSwitch)
+                {
+                    List<string> ids = MediaCtl.PausePlaying();
+                    foreach (string id in ids)
+                        if (!pausedMedia.Contains(id)) pausedMedia.Add(id);
+                    Log.Add("  媒体：暂停 " + ids.Count + " 个" +
+                        (ids.Count > 0 ? "（" + string.Join(", ", ids.ToArray()) + "）" : "") +
+                        (MediaCtl.LastError.Length > 0 ? "；" + MediaCtl.LastError : ""));
+                }
+
                 string ok = "已切换";
                 if (missed.Count > 0) ok += "（没找到：" + string.Join("，", missed.ToArray()) + "）";
                 return ok;
@@ -1219,6 +1239,13 @@ namespace ScreenVeil
                 }
                 if (prevForeground != IntPtr.Zero && Nat.IsWindow(prevForeground))
                     Win.ForceForeground(prevForeground);
+
+                if (Cfg != null && Cfg.ResumeMediaOnRestore && pausedMedia.Count > 0)
+                {
+                    MediaCtl.Resume(pausedMedia);
+                    Log.Add("  已恢复媒体播放：" + string.Join(", ", pausedMedia.ToArray()));
+                    pausedMedia.Clear();
+                }
 
                 saved.Clear();
                 touched.Clear();
@@ -1373,6 +1400,80 @@ namespace ScreenVeil
         static bool IsOnAnyMonitor(RECT r)
         {
             return r.Right > r.Left && r.Bottom > r.Top && r.Right > -10000 && r.Left < 10000;
+        }
+    }
+
+    // ───────────────────────────── 媒体会话（暂停网页视频） ─────────────────────────────
+
+    internal static class MediaCtl
+    {
+        public static string LastError = "";
+
+        // 走 Windows 的全局媒体会话（GSMTC）：只暂停「此刻正在播放」的会话，
+        // 不碰音量、也不做「窗口失焦就静音」那种偷懒逻辑。
+        public static List<string> PausePlaying()
+        {
+            var paused = new List<string>();
+            LastError = "";
+#if WINRT
+            try
+            {
+                var op = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                var t = System.WindowsRuntimeSystemExtensions.AsTask(op);
+                if (!t.Wait(3000)) { LastError = "请求媒体会话超时"; return paused; }
+
+                var sessions = t.Result.GetSessions();
+                foreach (var s in sessions)
+                {
+                    try
+                    {
+                        if (s.GetPlaybackInfo().PlaybackStatus !=
+                            Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                            continue;
+
+                        var pop = s.TryPauseAsync();
+                        var pt = System.WindowsRuntimeSystemExtensions.AsTask(pop);
+                        if (pt.Wait(1500) && pt.Result)
+                            paused.Add(s.SourceAppUserModelId);
+                        else
+                            LastError = "暂停 " + s.SourceAppUserModelId + " 被拒绝";
+                    }
+                    catch (Exception ex) { LastError = ex.GetType().Name + ":" + ex.Message; }
+                }
+                if (sessions.Count == 0) LastError = "系统里没有媒体会话";
+            }
+            catch (Exception ex) { LastError = ex.GetType().Name + ":" + ex.Message; }
+#else
+            LastError = "编译时没有启用 WINRT";
+#endif
+            return paused;
+        }
+
+        public static void Resume(List<string> ids)
+        {
+#if WINRT
+            if (ids == null || ids.Count == 0) return;
+            try
+            {
+                var op = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                var t = System.WindowsRuntimeSystemExtensions.AsTask(op);
+                if (!t.Wait(3000)) return;
+
+                foreach (var s in t.Result.GetSessions())
+                {
+                    try
+                    {
+                        if (!ids.Contains(s.SourceAppUserModelId)) continue;
+                        if (s.GetPlaybackInfo().PlaybackStatus ==
+                            Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                            continue;
+                        s.TryPlayAsync();
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+#endif
         }
     }
 
@@ -2314,6 +2415,13 @@ namespace ScreenVeil
             RunWork(delegate
             {
                 string msg = engine.Apply();
+                try
+                {
+                    File.WriteAllText(Path.Combine(Path.GetTempPath(), "screenveil-apply.log"),
+                        DateTime.Now.ToString("HH:mm:ss") + "  " + msg + "\r\n" + string.Join("\r\n", engine.Log.ToArray()),
+                        new UTF8Encoding(false));
+                }
+                catch { }
                 Tip(msg);
                 if (!msg.StartsWith("已切换") && !shownError)
                 {

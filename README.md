@@ -15,6 +15,7 @@ everything else gets minimized. Another key puts every window back exactly where
 - **Idempotent** — pressing "switch" again just re-applies the layout. It never eats your original window positions, so "restore" keeps working.
 - **Restore keeps windows on their own screen** — if a window was saved half-overlapping the next monitor, it gets pulled back inside its own monitor (`restoreClamp`).
 - **Single monitor? Fine.** Screens that don't exist are skipped, and the picker hides the second row.
+- **Pauses whatever is playing** — on switch, media sessions Windows knows about (browser video/music) that are *currently playing* are paused; restore resumes them. It is an explicit action on the hotkey, **not** a "mute when unfocused" rule, so you can still listen to a video while working (`pauseMediaOnSwitch` / `resumeMediaOnRestore`).
 - **Portable** — one `.exe`, no installer, no runtime to download (Windows 10/11 ship .NET Framework 4.x).
 - **Quiet** — desktop notifications are off by default; errors still show a dialog.
 
@@ -69,6 +70,8 @@ There are three buttons:
 | `neverMinimize` | Process names that should survive the switch |
 | `hideInsteadOfMinimize` | Hide instead of minimize (invisible even in the taskbar) |
 | `restoreClamp` | Pull a restored window back inside its own monitor if it was saved overlapping another screen |
+| `pauseMediaOnSwitch` | Pause media that is playing when you switch (default `true`) |
+| `resumeMediaOnRestore` | Resume the media this app paused, when you restore (default `true`) |
 
 ## Build
 
