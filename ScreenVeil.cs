@@ -1,4 +1,4 @@
-// ScreenVeil —— 双屏“老板键”
+﻿// ScreenVeil —— 双屏“老板键”
 // 按一个热键：把所有窗口最小化，然后按配置把指定应用分别铺到每块屏幕上；
 // 再按一次（或按恢复键）回到原来的样子。
 //
@@ -271,6 +271,7 @@ namespace ScreenVeil
     {
         public string HotKey = "Ctrl+Alt+M";
         public string RestoreHotKey = "Ctrl+Alt+R";
+        public string DesktopHotKey = "";   // 只留桌面；空 = 不启用
         public bool ToggleOnRepeat = false;
         public bool MinimizeOthers = true;
         public bool HideInsteadOfMinimize = false;
@@ -309,6 +310,7 @@ namespace ScreenVeil
   ""_说明"": ""改完保存后，在托盘图标右键菜单里点「重新加载配置」。process 填进程名（任务管理器里的名字，不带 .exe，如 winword / chrome / Code / msedge）。exe 可选：程序没开时自动启动它。title 可选：正则，用来在同一个程序里挑窗口。span=true 表示让这个窗口横跨所有屏幕（一个窗口铺满两块屏）。"",
   ""hotkey"": ""Ctrl+Alt+M"",
   ""restoreHotkey"": ""Ctrl+Alt+R"",
+  ""desktopHotkey"": """",
   ""toggleOnRepeat"": false,
   ""minimizeOthers"": true,
   ""hideInsteadOfMinimize"": false,
@@ -399,6 +401,7 @@ namespace ScreenVeil
 
             cfg.HotKey = GetStr(d, "hotkey", cfg.HotKey);
             cfg.RestoreHotKey = GetStr(d, "restoreHotkey", cfg.RestoreHotKey);
+            cfg.DesktopHotKey = GetStr(d, "desktopHotkey", cfg.DesktopHotKey);
             cfg.ToggleOnRepeat = GetBool(d, "toggleOnRepeat", cfg.ToggleOnRepeat);
             cfg.MinimizeOthers = GetBool(d, "minimizeOthers", cfg.MinimizeOthers);
             cfg.HideInsteadOfMinimize = GetBool(d, "hideInsteadOfMinimize", cfg.HideInsteadOfMinimize);
@@ -462,6 +465,7 @@ namespace ScreenVeil
             sb.AppendLine("  \"_说明\": " + J("改完保存后，在托盘图标右键菜单里点「重新加载配置」。process 填进程名（任务管理器里的名字，不带 .exe）。exe 可选：程序没开时自动启动它。title 可选：正则，用来在同一个程序里挑窗口。span=true 表示让这个窗口横跨所有屏幕。hotkey 可以写组合键，也可以写鼠标侧键 Mouse4 / Mouse5。") + ",");
             sb.AppendLine("  \"hotkey\": " + J(cfg.HotKey) + ",");
             sb.AppendLine("  \"restoreHotkey\": " + J(cfg.RestoreHotKey) + ",");
+            sb.AppendLine("  \"desktopHotkey\": " + J(cfg.DesktopHotKey) + ",");
             sb.AppendLine("  \"toggleOnRepeat\": " + Bool(cfg.ToggleOnRepeat) + ",");
             sb.AppendLine("  \"minimizeOthers\": " + Bool(cfg.MinimizeOthers) + ",");
             sb.AppendLine("  \"hideInsteadOfMinimize\": " + Bool(cfg.HideInsteadOfMinimize) + ",");
@@ -1493,7 +1497,7 @@ namespace ScreenVeil
     {
         ComboBox cbMain, cbSub;
         CheckBox chkMin, chkAuto;
-        TextBox boxSwitch, boxRestore;
+        TextBox boxSwitch, boxRestore, boxDesktop;
         Label hintLabel;
         Config cfg;
         string hotkeyError;
@@ -1511,7 +1515,7 @@ namespace ScreenVeil
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(640, 300);
+            ClientSize = new Size(640, 334);
             Font = new Font("Microsoft YaHei UI", 9.5f);
             BackColor = Color.FromArgb(250, 250, 252);
             try { Icon = AppIcon.Get(); } catch { }
@@ -1586,11 +1590,28 @@ namespace ScreenVeil
             boxRestore = MakeKeyBox(new Point(388, 193), cfg.RestoreHotKey);
             Controls.Add(boxRestore);
 
+            var lblDesktop = new Label();
+            lblDesktop.Text = "只留桌面";
+            lblDesktop.AutoSize = true;
+            lblDesktop.Location = new Point(112, 231);
+            Controls.Add(lblDesktop);
+
+            boxDesktop = MakeKeyBox(new Point(168, 227), cfg.DesktopHotKey);
+            Controls.Add(boxDesktop);
+
+            var desktopNote = new Label();
+            desktopNote.Text = "（留空 = 不用这个功能）";
+            desktopNote.ForeColor = Color.FromArgb(150, 150, 160);
+            desktopNote.Font = new Font("Microsoft YaHei UI", 8.5f);
+            desktopNote.AutoSize = true;
+            desktopNote.Location = new Point(318, 231);
+            Controls.Add(desktopNote);
+
             hintLabel = new Label();
             hintLabel.Text = string.IsNullOrEmpty(hotkeyError) ? "点一下输入框，然后按组合键（鼠标侧键也行）" : hotkeyError;
             hintLabel.ForeColor = string.IsNullOrEmpty(hotkeyError) ? Color.FromArgb(130, 130, 140) : Color.FromArgb(200, 50, 50);
             hintLabel.AutoSize = true;
-            hintLabel.Location = new Point(112, 224);
+            hintLabel.Location = new Point(112, 258);
             Controls.Add(hintLabel);
 
             SelectProcess(cbMain, cfg.Targets.Count > 0 ? cfg.Targets[0].Process : "");
@@ -1605,7 +1626,7 @@ namespace ScreenVeil
 
             var btnTest = new Button();
             btnTest.Text = "试跑 5 秒";
-            btnTest.Location = new Point(20, 248);
+            btnTest.Location = new Point(20, 282);
             btnTest.Size = new Size(104, 34);
             btnTest.Click += delegate { SaveAndClose(2); };
             Controls.Add(btnTest);
@@ -1615,19 +1636,19 @@ namespace ScreenVeil
             stay.ForeColor = Color.FromArgb(150, 150, 160);
             stay.Font = new Font("Microsoft YaHei UI", 8.5f);
             stay.AutoSize = true;
-            stay.Location = new Point(136, 258);
+            stay.Location = new Point(136, 292);
             Controls.Add(stay);
 
             var btnSave = new Button();
             btnSave.Text = "保存";
-            btnSave.Location = new Point(414, 248);
+            btnSave.Location = new Point(414, 282);
             btnSave.Size = new Size(96, 34);
             btnSave.Click += delegate { SaveAndClose(0); };
             Controls.Add(btnSave);
 
             var btnSaveGo = new Button();
             btnSaveGo.Text = "保存并切换";
-            btnSaveGo.Location = new Point(518, 248);
+            btnSaveGo.Location = new Point(518, 282);
             btnSaveGo.Size = new Size(104, 34);
             btnSaveGo.Click += delegate { SaveAndClose(1); };
             Controls.Add(btnSaveGo);
@@ -1656,7 +1677,7 @@ namespace ScreenVeil
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             Control c = ActiveControl;
-            if (c != null && (c == boxSwitch || c == boxRestore))
+            if (c != null && (c == boxSwitch || c == boxRestore || c == boxDesktop))
             {
                 Keys key = keyData & Keys.KeyCode;
                 Keys mods = keyData & Keys.Modifiers;
@@ -1678,7 +1699,7 @@ namespace ScreenVeil
         public bool TryRecordMouse(int button)
         {
             Control c = ActiveControl;
-            if (c == null || (c != boxSwitch && c != boxRestore)) return false;
+            if (c == null || (c != boxSwitch && c != boxRestore && c != boxDesktop)) return false;
             ((TextBox)c).Text = button == 1 ? "Mouse4" : "Mouse5";
             if (hintLabel != null)
             {
@@ -1698,7 +1719,7 @@ namespace ScreenVeil
         void CaptureKeys(KeyEventArgs e)
         {
             Control c = ActiveControl;
-            if (c == null || (c != boxSwitch && c != boxRestore)) return;
+            if (c == null || (c != boxSwitch && c != boxRestore && c != boxDesktop)) return;
             e.SuppressKeyPress = true;
             e.Handled = true;
 
@@ -1953,6 +1974,7 @@ namespace ScreenVeil
 
             string hk = boxSwitch.Text.Trim();
             string rk = boxRestore.Text.Trim();
+            string dk = boxDesktop.Text.Trim();
             HotkeySpec ha = Hotkey.Parse(hk);
             HotkeySpec hb = Hotkey.Parse(rk);
             if (ha.Error.Length > 0)
@@ -1973,11 +1995,29 @@ namespace ScreenVeil
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
+            if (dk.Length > 0)
+            {
+                HotkeySpec hd = Hotkey.Parse(dk);
+                if (hd.Error.Length > 0)
+                {
+                    MessageBox.Show(this, "只留桌面键没法用：" + hd.Error, "ScreenVeil",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                if (string.Equals(dk, hk, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(dk, rk, StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(this, "三个键不能重复。", "ScreenVeil",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+            }
 
             cfg.Targets = targets;
             cfg.MinimizeOthers = chkMin.Checked;
             cfg.HotKey = hk;
             cfg.RestoreHotKey = rk;
+            cfg.DesktopHotKey = dk;
 
             try { Startup.Set(chkAuto.Checked); } catch { }
 
@@ -2033,6 +2073,7 @@ namespace ScreenVeil
     {
         const int HK_TOGGLE = 1;
         const int HK_RESTORE = 2;
+        const int HK_DESKTOP = 3;
 
         HotkeyForm form;
         NotifyIcon icon;
@@ -2046,10 +2087,15 @@ namespace ScreenVeil
         string hotkeyError = "";
         string activeHotkey = "";
         string activeRestore = "";
+        string activeDesktop = "";
         IntPtr mouseHook = IntPtr.Zero;
         Nat.LowLevelMouseProc mouseProc;
         int mouseSwitchButton;
         int mouseRestoreButton;
+        int mouseDesktopButton;
+        bool desktopMode;
+        readonly List<IntPtr> desktopMinimized = new List<IntPtr>();
+        readonly List<string> desktopPausedMedia = new List<string>();
         bool shownError;
         readonly object workGate = new object();
         bool busy;
@@ -2077,6 +2123,7 @@ namespace ScreenVeil
 
             string err = RegisterHotkeys();
             hotkeyError = err;
+            LogDesktop("启动注册: err=[" + err + "] mouse=" + mouseSwitchButton + "/" + mouseRestoreButton + "/" + mouseDesktopButton + " hook=" + mouseHook);
             string tip = string.IsNullOrEmpty(err) ? "已就绪：" + cfg.HotKey + " 切换" : err;
             Tip(tip);
 
@@ -2208,22 +2255,29 @@ namespace ScreenVeil
 
             HotkeySpec a = Hotkey.Parse(cfg.HotKey);
             HotkeySpec b = Hotkey.Parse(cfg.RestoreHotKey);
+            bool hasDesktop = !string.IsNullOrEmpty((cfg.DesktopHotKey ?? "").Trim());
+            HotkeySpec c = hasDesktop ? Hotkey.Parse(cfg.DesktopHotKey) : null;
 
             if (a.Error.Length > 0) { hotkeyError = "切换热键无效：" + a.Error; return hotkeyError; }
             if (b.Error.Length > 0) { hotkeyError = "恢复热键无效：" + b.Error; return hotkeyError; }
+            if (hasDesktop && c.Error.Length > 0) { hotkeyError = "只留桌面热键无效：" + c.Error; return hotkeyError; }
 
             Nat.UnregisterHotKey(form.Handle, HK_TOGGLE);
             Nat.UnregisterHotKey(form.Handle, HK_RESTORE);
+            Nat.UnregisterHotKey(form.Handle, HK_DESKTOP);
 
             bool ok1 = a.IsMouse || Nat.RegisterHotKey(form.Handle, HK_TOGGLE, a.Mods | Nat.MOD_NOREPEAT, a.Key);
             bool ok2 = b.IsMouse || Nat.RegisterHotKey(form.Handle, HK_RESTORE, b.Mods | Nat.MOD_NOREPEAT, b.Key);
+            bool ok3 = !hasDesktop || c.IsMouse || Nat.RegisterHotKey(form.Handle, HK_DESKTOP, c.Mods | Nat.MOD_NOREPEAT, c.Key);
 
-            if (ok1 && ok2)
+            if (ok1 && ok2 && ok3)
             {
                 mouseSwitchButton = a.IsMouse ? a.MouseButton : 0;
                 mouseRestoreButton = b.IsMouse ? b.MouseButton : 0;
+                mouseDesktopButton = (hasDesktop && c.IsMouse) ? c.MouseButton : 0;
                 activeHotkey = cfg.HotKey;
                 activeRestore = cfg.RestoreHotKey;
+                activeDesktop = cfg.DesktopHotKey ?? "";
                 hotkeyError = "";
                 EnsureMouseHook();
                 return null;
@@ -2232,8 +2286,10 @@ namespace ScreenVeil
             // 有冲突：撤掉刚注册的，退回上一次能用的组合，并把配置改回去
             Nat.UnregisterHotKey(form.Handle, HK_TOGGLE);
             Nat.UnregisterHotKey(form.Handle, HK_RESTORE);
+            Nat.UnregisterHotKey(form.Handle, HK_DESKTOP);
             mouseSwitchButton = 0;
             mouseRestoreButton = 0;
+            mouseDesktopButton = 0;
 
             if (activeHotkey.Length > 0)
             {
@@ -2253,24 +2309,36 @@ namespace ScreenVeil
                     else Nat.RegisterHotKey(form.Handle, HK_RESTORE, ob.Mods | Nat.MOD_NOREPEAT, ob.Key);
                 }
             }
+            if (activeDesktop.Length > 0)
+            {
+                HotkeySpec oc = Hotkey.Parse(activeDesktop);
+                if (oc.Error.Length == 0)
+                {
+                    if (oc.IsMouse) mouseDesktopButton = oc.MouseButton;
+                    else Nat.RegisterHotKey(form.Handle, HK_DESKTOP, oc.Mods | Nat.MOD_NOREPEAT, oc.Key);
+                }
+            }
             EnsureMouseHook();
 
-            hotkeyError = ok1
-                ? "还原键 " + cfg.RestoreHotKey + " 被别的程序占用了"
-                : "热键 " + cfg.HotKey + " 被别的程序占用了";
+            string which = !ok1 ? cfg.HotKey : (!ok2 ? cfg.RestoreHotKey : cfg.DesktopHotKey);
+            hotkeyError = "热键 " + which + " 被别的程序占用了";
 
             if (activeHotkey.Length > 0)
             {
                 cfg.HotKey = activeHotkey;
                 cfg.RestoreHotKey = activeRestore;
+                cfg.DesktopHotKey = activeDesktop;
                 try { ConfigIO.Save(cfg); } catch { }
-                hotkeyError += "（已沿用原来的 " + activeHotkey + "）";
+                hotkeyError += "（已沿用原来的组合）";
             }
 
             return hotkeyError;
         }
 
-        bool MouseHotkeyConfigured { get { return mouseSwitchButton != 0 || mouseRestoreButton != 0; } }
+        bool MouseHotkeyConfigured
+        {
+            get { return mouseSwitchButton != 0 || mouseRestoreButton != 0 || mouseDesktopButton != 0; }
+        }
 
         // 只有「绑了鼠标侧键」或「选择窗口开着（可能要录制）」时才装钩子，
         // 纯键盘用户完全不装，没有任何鼠标走这里的开销。
@@ -2304,6 +2372,7 @@ namespace ScreenVeil
                     int btn = (info.mouseData >> 16) & 0xFFFF;
                     if (btn == 1 || btn == 2)
                     {
+                        LogDesktop("鼠标侧键 " + btn + " (switch=" + mouseSwitchButton + " restore=" + mouseRestoreButton + " desktop=" + mouseDesktopButton + ")");
                         // 正在录制按键：写进输入框，并吞掉这个键
                         if (picker != null && !picker.IsDisposed && picker.TryRecordMouse(btn))
                             return (IntPtr)1;
@@ -2311,6 +2380,7 @@ namespace ScreenVeil
                         // 已经绑定：触发，并吞掉（不然浏览器会执行后退/前进）
                         if (btn == mouseSwitchButton) { DoToggle(); return (IntPtr)1; }
                         if (btn == mouseRestoreButton) { DoRestore(); return (IntPtr)1; }
+                        if (btn == mouseDesktopButton) { DoDesktop(); return (IntPtr)1; }
                     }
                 }
             }
@@ -2338,6 +2408,12 @@ namespace ScreenVeil
             var miRestore = new ToolStripMenuItem("恢复  (" + cfg.RestoreHotKey + ")");
             miRestore.Click += delegate { DoRestore(); };
             menu.Items.Add(miRestore);
+
+            var miDesk = new ToolStripMenuItem(string.IsNullOrEmpty(cfg.DesktopHotKey)
+                ? "只留桌面"
+                : "只留桌面  (" + cfg.DesktopHotKey + ")");
+            miDesk.Click += delegate { DoDesktop(); };
+            menu.Items.Add(miDesk);
 
             var miTry = new ToolStripMenuItem("试跑 5 秒（自动还原）");
             miTry.Click += delegate { DoSelfTest(5); };
@@ -2390,8 +2466,90 @@ namespace ScreenVeil
 
         void OnHotkey(int id)
         {
+            LogDesktop("OnHotkey id=" + id);
             if (id == HK_TOGGLE) DoToggle();
             else if (id == HK_RESTORE) DoRestore();
+            else if (id == HK_DESKTOP) DoDesktop();
+        }
+
+        static void LogDesktop(string msg)
+        {
+            try
+            {
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "screenveil-desktop.log"),
+                    DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + "\r\n", new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        // 只留桌面：把所有窗口最小化（再按一次放回来）
+        void DoDesktop()
+        {
+            LogDesktop("DoDesktop 进入，desktopMode=" + desktopMode);
+            RunWork(delegate
+            {
+                try
+                {
+                    if (!desktopMode)
+                    {
+                        List<WindowInfo> all = Win.GetWindows();
+                        int self = Process.GetCurrentProcess().Id;
+                        desktopMinimized.Clear();
+
+                        foreach (WindowInfo w in all)
+                        {
+                            if (w.Pid == self) continue;
+                            if (w.Iconic) continue;
+
+                            Nat.ShowWindow(w.H, Nat.SW_MINIMIZE);
+                            desktopMinimized.Add(w.H);
+                        }
+
+                        desktopMode = true;
+                        Tip("已最小化 " + desktopMinimized.Count + " 个窗口");
+                        LogDesktop("最小化了 " + desktopMinimized.Count + " 个窗口");
+
+                        // 暂停媒体放到后台做，别让这个键按下去有延迟
+                        lock (desktopPausedMedia) desktopPausedMedia.Clear();
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            try
+                            {
+                                foreach (string id in MediaCtl.PausePlaying())
+                                    lock (desktopPausedMedia) desktopPausedMedia.Add(id);
+                            }
+                            catch { }
+                        });
+                    }
+                    else
+                    {
+                        int n = 0;
+                        foreach (IntPtr h in desktopMinimized)
+                        {
+                            if (!Nat.IsWindow(h)) continue;
+                            if (Nat.IsIconic(h)) { Nat.ShowWindow(h, Nat.SW_RESTORE); n++; }
+                        }
+
+                        List<string> ids;
+                        lock (desktopPausedMedia)
+                        {
+                            ids = new List<string>(desktopPausedMedia);
+                            desktopPausedMedia.Clear();
+                        }
+
+                        desktopMinimized.Clear();
+                        desktopMode = false;
+                        Tip("已恢复 " + n + " 个窗口");
+                        LogDesktop("恢复分支：恢复了 " + n + " 个窗口");
+
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            try { MediaCtl.Resume(ids); } catch { }
+                        });
+                    }
+                }
+                catch (Exception ex) { Tip("只留桌面出错：" + ex.Message); }
+            });
         }
 
         void DoToggle()
@@ -2402,6 +2560,14 @@ namespace ScreenVeil
 
         void DoApply()
         {
+            // 从「只留桌面」状态切过来：忘掉之前那批最小化的窗口，避免之后重复恢复
+            if (desktopMode)
+            {
+                desktopMode = false;
+                desktopMinimized.Clear();
+                desktopPausedMedia.Clear();
+            }
+
             // 选择窗口还开着的话，让它让开，否则它会盖在切换结果上面
             try
             {
@@ -2818,6 +2984,44 @@ namespace ScreenVeil
                 return;
             }
 
+            if (cmd == "--desktoptest")
+            {
+                int secs = 3;
+                if (args.Length > 1) { int v; if (int.TryParse(args[1], out v) && v > 0 && v < 60) secs = v; }
+                string outPath = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "screenveil-desktop.txt");
+
+                List<WindowInfo> ws = Win.GetWindows();
+                int self = Process.GetCurrentProcess().Id;
+                var hs = new List<IntPtr>();
+                var log = new StringBuilder();
+                log.AppendLine("可见窗口 " + ws.Count + " 个：");
+
+                foreach (WindowInfo w in ws)
+                {
+                    if (w.Pid == self) continue;
+                    if (w.Iconic) { log.AppendLine("  [已最小化] " + w.Title); continue; }
+                    if (Nat.ShowWindow(w.H, Nat.SW_MINIMIZE))
+                    {
+                        hs.Add(w.H);
+                        log.AppendLine("  [最小化] " + w.Title);
+                    }
+                }
+
+                Thread.Sleep(secs * 1000);
+
+                int back = 0;
+                foreach (IntPtr h in hs)
+                {
+                    if (!Nat.IsWindow(h)) continue;
+                    if (Nat.IsIconic(h)) { Nat.ShowWindow(h, Nat.SW_RESTORE); back++; }
+                }
+
+                log.AppendLine();
+                log.AppendLine("最小化 " + hs.Count + " 个，恢复 " + back + " 个");
+                try { File.WriteAllText(outPath, log.ToString(), new UTF8Encoding(false)); } catch { }
+                try { Console.Out.Write(log.ToString()); } catch { }
+                return;
+            }
             if (cmd == "--apply" || cmd == "--restore")
             {
                 string logPath = args.Length > 1 ? args[1] : Path.Combine(Path.GetTempPath(), "ScreenVeil-apply.txt");
