@@ -15,7 +15,7 @@ everything else gets minimized. Another key puts every window back exactly where
 - **Idempotent** — pressing "switch" again just re-applies the layout. It never eats your original window positions, so "restore" keeps working.
 - **Restore keeps windows on their own screen** — if a window was saved half-overlapping the next monitor, it gets pulled back inside its own monitor (`restoreClamp`).
 - **Single monitor? Fine.** Screens that don't exist are skipped, and the picker hides the second row.
-- **Show desktop on one key** — an optional third hotkey (e.g. `F2`) minimizes everything and leaves only the desktop; press it again to bring the windows back. It pauses playing media too. Set it in the picker or leave it empty to disable.
+- **Show desktop on one key** — an optional third hotkey (e.g. `F2`) minimizes everything and leaves only the desktop; press it again to bring the windows back. It pauses playing media too. Set it in the picker or leave it empty to disable. Windows started as administrator are handled through the shell's own show-desktop, since UIPI blocks a normal process from minimizing them.
 - **Pauses whatever is playing** — on switch, media sessions Windows knows about (browser video/music) that are *currently playing* are paused; restore resumes them. It is an explicit action on the hotkey, **not** a "mute when unfocused" rule, so you can still listen to a video while working (`pauseMediaOnSwitch` / `resumeMediaOnRestore`).
 - **Portable** — one `.exe`, no installer, no runtime to download (Windows 10/11 ship .NET Framework 4.x).
 - **Quiet** — desktop notifications are off by default; errors still show a dialog.

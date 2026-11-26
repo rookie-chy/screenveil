@@ -1407,6 +1407,72 @@ namespace ScreenVeil
         }
     }
 
+    // ───────────────────────────── 只留桌面 ─────────────────────────────
+
+    internal static class Desk
+    {
+        // 普通窗口自己最小化；高权限窗口（以管理员运行的程序）UIPI 不让动，
+        // 这时退回系统的 ToggleDesktop（Win+D 背后那个），它能跨权限。
+        public static int HideAll(out List<IntPtr> hidden, out bool usedShell)
+        {
+            hidden = new List<IntPtr>();
+            usedShell = false;
+            int self = Process.GetCurrentProcess().Id;
+
+            foreach (WindowInfo w in Win.GetWindows())
+            {
+                if (w.Pid == self) continue;
+                if (w.Iconic) continue;
+                Nat.ShowWindow(w.H, Nat.SW_MINIMIZE);
+                if (Nat.IsIconic(w.H)) hidden.Add(w.H);   // ShowWindow 的返回值是"之前是否可见"，不能当成功
+            }
+
+            if (StillVisible() > 0 && ToggleDesktop()) usedShell = true;
+            return hidden.Count;
+        }
+
+        public static int ShowAll(List<IntPtr> hidden, bool usedShell)
+        {
+            if (usedShell) ToggleDesktop();
+
+            int n = 0;
+            if (hidden != null)
+            {
+                foreach (IntPtr h in hidden)
+                {
+                    if (!Nat.IsWindow(h)) continue;
+                    if (Nat.IsIconic(h)) { Nat.ShowWindow(h, Nat.SW_RESTORE); n++; }
+                }
+            }
+            return n;
+        }
+
+        static int StillVisible()
+        {
+            int self = Process.GetCurrentProcess().Id;
+            int n = 0;
+            foreach (WindowInfo w in Win.GetWindows())
+            {
+                if (w.Pid == self) continue;
+                if (w.Iconic) continue;
+                n++;
+            }
+            return n;
+        }
+
+        public static bool ToggleDesktop()
+        {
+            try
+            {
+                Type t = Type.GetTypeFromProgID("Shell.Application");
+                if (t == null) return false;
+                object sh = Activator.CreateInstance(t);
+                t.InvokeMember("ToggleDesktop", BindingFlags.InvokeMethod, null, sh, null);
+                return true;
+            }
+            catch { return false; }
+        }
+    }
     // ───────────────────────────── 媒体会话（暂停网页视频） ─────────────────────────────
 
     internal static class MediaCtl
@@ -2094,6 +2160,7 @@ namespace ScreenVeil
         int mouseRestoreButton;
         int mouseDesktopButton;
         bool desktopMode;
+        bool desktopUsedShell;
         readonly List<IntPtr> desktopMinimized = new List<IntPtr>();
         readonly List<string> desktopPausedMedia = new List<string>();
         bool shownError;
@@ -2492,22 +2559,18 @@ namespace ScreenVeil
                 {
                     if (!desktopMode)
                     {
-                        List<WindowInfo> all = Win.GetWindows();
-                        int self = Process.GetCurrentProcess().Id;
+                        List<IntPtr> hidden;
+                        bool usedShell;
+                        int count = Desk.HideAll(out hidden, out usedShell);
                         desktopMinimized.Clear();
-
-                        foreach (WindowInfo w in all)
-                        {
-                            if (w.Pid == self) continue;
-                            if (w.Iconic) continue;
-
-                            Nat.ShowWindow(w.H, Nat.SW_MINIMIZE);
-                            desktopMinimized.Add(w.H);
-                        }
+                        foreach (IntPtr h in hidden) desktopMinimized.Add(h);
+                        desktopUsedShell = usedShell;
 
                         desktopMode = true;
-                        Tip("已最小化 " + desktopMinimized.Count + " 个窗口");
-                        LogDesktop("最小化了 " + desktopMinimized.Count + " 个窗口");
+                        Tip(usedShell
+                            ? "已只留桌面（" + count + " 个窗口，剩下的交给系统）"
+                            : "已最小化 " + count + " 个窗口");
+                        LogDesktop("最小化了 " + count + " 个窗口，用了系统兜底=" + usedShell);
 
                         // 暂停媒体放到后台做，别让这个键按下去有延迟
                         lock (desktopPausedMedia) desktopPausedMedia.Clear();
@@ -2523,12 +2586,8 @@ namespace ScreenVeil
                     }
                     else
                     {
-                        int n = 0;
-                        foreach (IntPtr h in desktopMinimized)
-                        {
-                            if (!Nat.IsWindow(h)) continue;
-                            if (Nat.IsIconic(h)) { Nat.ShowWindow(h, Nat.SW_RESTORE); n++; }
-                        }
+                        int n = Desk.ShowAll(desktopMinimized, desktopUsedShell);
+                        desktopUsedShell = false;
 
                         List<string> ids;
                         lock (desktopPausedMedia)
@@ -2990,34 +3049,16 @@ namespace ScreenVeil
                 if (args.Length > 1) { int v; if (int.TryParse(args[1], out v) && v > 0 && v < 60) secs = v; }
                 string outPath = args.Length > 2 ? args[2] : Path.Combine(Path.GetTempPath(), "screenveil-desktop.txt");
 
-                List<WindowInfo> ws = Win.GetWindows();
-                int self = Process.GetCurrentProcess().Id;
-                var hs = new List<IntPtr>();
                 var log = new StringBuilder();
-                log.AppendLine("可见窗口 " + ws.Count + " 个：");
-
-                foreach (WindowInfo w in ws)
-                {
-                    if (w.Pid == self) continue;
-                    if (w.Iconic) { log.AppendLine("  [已最小化] " + w.Title); continue; }
-                    if (Nat.ShowWindow(w.H, Nat.SW_MINIMIZE))
-                    {
-                        hs.Add(w.H);
-                        log.AppendLine("  [最小化] " + w.Title);
-                    }
-                }
+                List<IntPtr> hs;
+                bool usedShell;
+                int hidden = Desk.HideAll(out hs, out usedShell);
+                log.AppendLine("隐藏 " + hidden + " 个窗口（系统兜底=" + usedShell + "）");
 
                 Thread.Sleep(secs * 1000);
 
-                int back = 0;
-                foreach (IntPtr h in hs)
-                {
-                    if (!Nat.IsWindow(h)) continue;
-                    if (Nat.IsIconic(h)) { Nat.ShowWindow(h, Nat.SW_RESTORE); back++; }
-                }
-
-                log.AppendLine();
-                log.AppendLine("最小化 " + hs.Count + " 个，恢复 " + back + " 个");
+                int back = Desk.ShowAll(hs, usedShell);
+                log.AppendLine("恢复 " + back + " 个窗口");
                 try { File.WriteAllText(outPath, log.ToString(), new UTF8Encoding(false)); } catch { }
                 try { Console.Out.Write(log.ToString()); } catch { }
                 return;
